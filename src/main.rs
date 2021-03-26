@@ -57,6 +57,30 @@ impl<T: EnvInit, S: Sensor, R: Reward> Environment<T, S, R> {
             self.pois.iter_mut().collect(),
         );
     }
+
+    fn clamp(&mut self) {
+        for mut rover in self.rovers.iter_mut() {
+            let clamped = na::clamp(
+                rover.position,
+                Point::origin(),
+                Point::new(self.size.0, self.size.1),
+            );
+            Rc::get_mut(&mut rover)
+                .expect("Error: More than one reference to rover.")
+                .set_pos(clamped.x, clamped.y);
+        }
+    }
+
+    fn status(&mut self) -> (Vec<State>, Vec<f64>) {
+        let mut states = Vec::new();
+        let mut rewards = Vec::new();
+        // Observations and rewards
+        for rover in self.rovers.iter() {
+            states.push(rover.scan(self.rovers.clone(), self.pois.clone()));
+            rewards.push(rover.reward(self.rovers.clone(), self.pois.clone()));
+        }
+        (states, rewards)
+    }
 }
 
 struct EnvRand;
@@ -152,7 +176,10 @@ impl<T: Sensor, R: Reward> Rover<T, R> {
             .map_or(State::from_element(1, -1.0), |s| s.scan(rovers, pois))
     }
 
-    fn reward(&self, rovers: Vec<Rc<Rover<T, R>>>, pois: Vec<Rc<&mut Poi>>) -> f64 {
+    // TODO: How would you handle the case where a POI only gives out its reward once? If two
+    // rovers access it at the same time (in the same frame), which one does the reward go to? It
+    // could depend on where the rover is in the array of rovers.
+    fn reward(&self, rovers: Vec<Rc<Rover<T, R>>>, pois: Vec<Rc<Poi>>) -> f64 {
         self.reward_type.calculate(self.ident, rovers, pois)
     }
 
@@ -203,19 +230,10 @@ impl Reward for DefaultReward {
         &self,
         _id: usize,
         rovers: Vec<Rc<Rover<T, R>>>,
-        pois: Vec<Rc<&mut Poi>>,
+        pois: Vec<Rc<Poi>>,
     ) -> f64 {
         pois.into_iter()
-            .map(|mut poi| match (poi.hidden(), Rc::get_mut(&mut poi)) {
-                (true, _) => 0.0,
-                (_, Some(poi)) => poi.give_reward(&rovers).unwrap_or(0.0),
-                (_, None) => {
-                    eprintln!(
-                        "Warning: Too many references - POI not set as hidden, not giving reward"
-                    );
-                    0.0
-                }
-            })
+            .map(|poi| poi.give_reward(&rovers).unwrap_or(0.0))
             .sum()
     }
 }
@@ -227,7 +245,7 @@ impl Reward for DifferenceReward {
         &self,
         id: usize,
         rovers: Vec<Rc<Rover<T, R>>>,
-        pois: Vec<Rc<&mut Poi>>,
+        pois: Vec<Rc<Poi>>,
     ) -> f64 {
         let reward = DefaultReward.calculate(id, rovers.clone(), pois.clone());
         let rovers = without_id(id, rovers);
@@ -382,13 +400,10 @@ impl Agent for Poi {
 }
 
 impl Rewarder for Poi {
-    fn give_reward<T: Agent>(&mut self, agents: &[Rc<T>]) -> Option<f64> {
+    fn give_reward<T: Agent>(&self, agents: &[Rc<T>]) -> Option<f64> {
         match (self.hid, &self.constraint) {
-            (false, Constraint::Count(x)) if self.num_observing(agents) >= *x => {
-                self.hid = true;
-                Some(self.val)
-            }
-            _ => None,
+            (false, Constraint::Count(x)) if self.num_observing(agents) >= *x => Some(self.val),
+            (_, Constraint::Count(_)) => None,
         }
     }
 
@@ -440,7 +455,7 @@ trait Agent {
 }
 
 trait Rewarder {
-    fn give_reward<T: Agent>(&mut self, agents: &[Rc<T>]) -> Option<f64>;
+    fn give_reward<T: Agent>(&self, agents: &[Rc<T>]) -> Option<f64>;
     fn num_observing<T: Agent>(&self, agents: &[Rc<T>]) -> usize;
 }
 
@@ -456,6 +471,6 @@ trait Reward {
         &self,
         id: usize,
         rovers: Vec<Rc<Rover<T, R>>>,
-        pois: Vec<Rc<&mut Poi>>,
+        pois: Vec<Rc<Poi>>,
     ) -> f64;
 }
