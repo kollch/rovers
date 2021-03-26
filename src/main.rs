@@ -11,11 +11,9 @@ fn main() {
 
     let mut rovers = Vec::new();
     // Create agent with lidar, discrete action space and difference reward
-    let rover_loc = Point::new(0.0, 0.0);
     rovers.push(Rc::new(Rover::new(
-        rover_loc,
         DifferenceReward,
-        Some(Lidar::new(LidarType::Closest, 90.0, 2.0, rover_loc)),
+        Some(Lidar::new(LidarType::Closest, 90.0, 2.0)),
     )));
     let mut pois = Vec::new();
     pois.push(Rc::new(Poi::new(
@@ -39,22 +37,44 @@ struct Environment<T: EnvInit, S: Sensor, R: Reward> {
     size: (f64, f64),
 }
 
+impl<T: EnvInit, S: Sensor, R: Reward> Environment<T, S, R> {
+    fn reset(&mut self) {
+        // Clear agents
+        for mut rover in self.rovers.iter_mut() {
+            Rc::get_mut(&mut rover)
+                .expect("Error: More than one reference to rover.")
+                .reset();
+        }
+        // Reset POIs
+        for mut poi in self.pois.iter_mut() {
+            Rc::get_mut(&mut poi)
+                .expect("Error: More than one reference to POI.")
+                .hid = false;
+        }
+        // Initialize
+        self.init_policy.init(
+            self.rovers.iter_mut().collect(),
+            self.pois.iter_mut().collect(),
+        );
+    }
+}
+
 struct EnvRand;
 
 impl EnvInit for EnvRand {
-    fn init_rovers<T: Sensor, R: Reward>(&self, rovers: Vec<Rc<&mut Rover<T, R>>>) {
+    fn init_rovers<T: Sensor, R: Reward>(&self, rovers: Vec<&mut Rc<Rover<T, R>>>) {
         for mut rover in rovers {
             Rc::get_mut(&mut rover)
                 .expect("Error: More than one reference to rover.")
-                .position = Point::new(0.0, 0.0);
+                .position = Point::origin();
         }
     }
 
-    fn init_pois(&self, pois: Vec<Rc<&mut Poi>>) {
+    fn init_pois(&self, pois: Vec<&mut Rc<Poi>>) {
         for mut poi in pois {
             Rc::get_mut(&mut poi)
                 .expect("Error: More than one reference to POI.")
-                .position = Point::new(0.0, 0.0);
+                .position = Point::origin();
         }
     }
 }
@@ -64,7 +84,7 @@ struct EnvCorners {
 }
 
 impl EnvInit for EnvCorners {
-    fn init_rovers<T: Sensor, R: Reward>(&self, rovers: Vec<Rc<&mut Rover<T, R>>>) {
+    fn init_rovers<T: Sensor, R: Reward>(&self, rovers: Vec<&mut Rc<Rover<T, R>>>) {
         let start = 1.0;
         let end = self.span - 1.0;
         let rad = self.span / f64::sqrt(3.0) / 2.0;
@@ -85,7 +105,7 @@ impl EnvInit for EnvCorners {
         }
     }
 
-    fn init_pois(&self, pois: Vec<Rc<&mut Poi>>) {
+    fn init_pois(&self, pois: Vec<&mut Rc<Poi>>) {
         let start = 0.0;
         let end = self.span - 1.0;
         for (i, mut poi) in pois.into_iter().enumerate() {
@@ -113,10 +133,10 @@ struct Rover<T: Sensor, R: Reward> {
 }
 
 impl<T: Sensor, R: Reward> Rover<T, R> {
-    fn new(position: Point, reward_type: R, sensor: Option<T>) -> Self {
+    fn new(reward_type: R, sensor: Option<T>) -> Self {
         Rover {
             ident: ID_COUNTER.fetch_add(1, Ordering::SeqCst),
-            position,
+            position: Point::origin(),
             path: Vec::new(),
             reward_type,
             sensor,
@@ -135,11 +155,16 @@ impl<T: Sensor, R: Reward> Rover<T, R> {
     fn reward(&self, rovers: Vec<Rc<Rover<T, R>>>, pois: Vec<Rc<&mut Poi>>) -> f64 {
         self.reward_type.calculate(self.ident, rovers, pois)
     }
+
+    fn reset(&mut self) {
+        self.set_pos(0.0, 0.0);
+        self.path.clear();
+    }
 }
 
 impl<T: Sensor> Default for Rover<T, DefaultReward> {
     fn default() -> Self {
-        Self::new(Point::origin(), DefaultReward, None)
+        Self::new(DefaultReward, None)
     }
 }
 
@@ -154,6 +179,8 @@ impl<T: Sensor, R: Reward> Agent for Rover<T, R> {
 
     fn set_pos(&mut self, x: f64, y: f64) {
         self.position = Point::new(x, y);
+        self.sensor.as_mut().map(|s| s.set_pos(x, y));
+        self.path.push(self.position);
     }
 
     fn radius(&self) -> f64 {
@@ -213,21 +240,21 @@ struct Lidar {
     ltype: LidarType,
     res: f64,
     range: f64,
-    pos: Point,
+    position: Point,
 }
 
 impl Lidar {
-    fn new(ltype: LidarType, resolution: f64, range: f64, pos: Point) -> Self {
+    fn new(ltype: LidarType, resolution: f64, range: f64) -> Self {
         Lidar {
             ltype,
             res: resolution,
             range,
-            pos,
+            position: Point::origin(),
         }
     }
 
     fn unbounded_sector(&self, point: Point) -> usize {
-        let offset = point - self.pos;
+        let offset = point - self.position;
         let angle = match offset.y.atan2(offset.x).to_degrees() {
             x if x < 0.0 => x + 360.0,
             x => x,
@@ -236,7 +263,7 @@ impl Lidar {
     }
 
     fn sector(&self, point: Point) -> Option<usize> {
-        if na::distance(&self.pos, &point) > self.range {
+        if na::distance(&self.position, &point) > self.range {
             None
         } else {
             Some(self.unbounded_sector(point))
@@ -250,7 +277,7 @@ impl Lidar {
             if agent.hidden() {
                 continue;
             }
-            let dist_sq = na::distance_squared(&self.pos, &agent.pos());
+            let dist_sq = na::distance_squared(&self.position, &agent.pos());
             if dist_sq > self.range.powi(2) {
                 continue;
             }
@@ -267,6 +294,10 @@ impl Lidar {
 impl Sensor for Lidar {
     fn radius(&self) -> f64 {
         self.range
+    }
+
+    fn set_pos(&mut self, x: f64, y: f64) {
+        self.position = Point::new(x, y);
     }
 
     fn scan<T: Sensor, R: Reward>(
@@ -380,12 +411,12 @@ fn without_id<A: Agent>(id: usize, agents: Vec<Rc<A>>) -> Vec<Rc<A>> {
 }
 
 trait EnvInit {
-    fn init_rovers<T: Sensor, R: Reward>(&self, rovers: Vec<Rc<&mut Rover<T, R>>>);
-    fn init_pois(&self, pois: Vec<Rc<&mut Poi>>);
+    fn init_rovers<T: Sensor, R: Reward>(&self, rovers: Vec<&mut Rc<Rover<T, R>>>);
+    fn init_pois(&self, pois: Vec<&mut Rc<Poi>>);
     fn init<T: Sensor, R: Reward>(
         &self,
-        rovers: Vec<Rc<&mut Rover<T, R>>>,
-        pois: Vec<Rc<&mut Poi>>,
+        rovers: Vec<&mut Rc<Rover<T, R>>>,
+        pois: Vec<&mut Rc<Poi>>,
     ) {
         self.init_rovers(rovers);
         self.init_pois(pois);
@@ -415,6 +446,7 @@ trait Rewarder {
 
 trait Sensor {
     fn radius(&self) -> f64;
+    fn set_pos(&mut self, x: f64, y: f64);
     fn scan<T: Sensor, R: Reward>(&self, rovers: Vec<Rc<Rover<T, R>>>, pois: Vec<Rc<Poi>>)
         -> State;
 }
