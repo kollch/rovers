@@ -38,7 +38,21 @@ struct Environment<T: EnvInit, S: Sensor, R: Reward> {
 }
 
 impl<T: EnvInit, S: Sensor, R: Reward> Environment<T, S, R> {
-    fn reset(&mut self) {
+    fn step(&mut self, actions: Vec<Vector>) -> (Vec<State>, Vec<f64>) {
+        for (i, mut rover) in self.rovers.iter_mut().enumerate() {
+            // Take actions
+            match Rc::get_mut(&mut rover) {
+                Some(r) => r.act(actions[i]),
+                None => eprintln!("Warning: More than one reference to rover - not acting."),
+            }
+        }
+        // Bound positions
+        self.clamp_positions();
+        // Return next observations and rewards
+        self.status()
+    }
+
+    fn reset(&mut self) -> (Vec<State>, Vec<f64>) {
         // Clear agents
         for mut rover in self.rovers.iter_mut() {
             Rc::get_mut(&mut rover)
@@ -56,9 +70,10 @@ impl<T: EnvInit, S: Sensor, R: Reward> Environment<T, S, R> {
             self.rovers.iter_mut().collect(),
             self.pois.iter_mut().collect(),
         );
+        self.status()
     }
 
-    fn clamp(&mut self) {
+    fn clamp_positions(&mut self) {
         for mut rover in self.rovers.iter_mut() {
             let clamped = na::clamp(
                 rover.position,
@@ -71,7 +86,7 @@ impl<T: EnvInit, S: Sensor, R: Reward> Environment<T, S, R> {
         }
     }
 
-    fn status(&mut self) -> (Vec<State>, Vec<f64>) {
+    fn status(&self) -> (Vec<State>, Vec<f64>) {
         let mut states = Vec::new();
         let mut rewards = Vec::new();
         // Observations and rewards
@@ -186,6 +201,11 @@ impl<T: Sensor, R: Reward> Rover<T, R> {
     fn reset(&mut self) {
         self.set_pos(0.0, 0.0);
         self.path.clear();
+    }
+
+    fn act(&mut self, action: Vector) {
+        let curr = self.position;
+        self.set_pos(curr.x + action.x, curr.y + action.y);
     }
 }
 
