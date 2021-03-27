@@ -4,13 +4,13 @@ use std::{
 };
 
 use nalgebra as na;
-use statrs::statistics::Mean;
+use rand::prelude::*;
 
 fn main() {
     println!("Hello, world!");
 
+    // Create some rovers
     let mut rovers = Vec::new();
-    // Create agent with lidar, discrete action space and difference reward
     rovers.push(Rc::new(Rover::new(
         Reward::Difference,
         Some(Sensor::Lidar {
@@ -38,13 +38,43 @@ fn main() {
             pos: Point::origin(),
         }),
     )));
+
+    // Create some POIs
     let mut pois = Vec::new();
     pois.push(Rc::new(Poi::new(
-        Point::new(2.0, 2.0),
+        Point::origin(),
         1.0,
         1.0,
         Constraint::Count(3),
     )));
+    pois.push(Rc::new(Poi::new(
+        Point::origin(),
+        1.0,
+        1.0,
+        Constraint::Count(2),
+    )));
+    pois.push(Rc::new(Poi::new(
+        Point::origin(),
+        1.0,
+        1.0,
+        Constraint::Count(5),
+    )));
+
+    // Create an environment
+    let mut env = Environment::new(EnvCorners { span: 10.0 }, rovers, pois, (10.0, 10.0));
+    env.reset();
+
+    let mut actions: Vec<Vector> = Vec::new();
+    for _ in 0..env.rovers.len() {
+        actions.push(Vector::new(random(), random()));
+    }
+
+    let (states, _rewards) = env.step(actions);
+
+    println!("Sample environment state (each row corresponds to the state of a rover):");
+    for state in states {
+        println!("{}", state);
+    }
 }
 
 type Point = na::Point2<f64>;
@@ -366,7 +396,7 @@ impl Sensor {
                 }
                 results
                     .into_iter()
-                    .map(|v| ltype.stat(&v).unwrap_or(-1.0))
+                    .map(|v| ltype.stat(v).unwrap_or(-1.0))
                     .collect()
             }
         }
@@ -391,11 +421,12 @@ enum LidarType {
 }
 
 impl LidarType {
-    fn stat(&self, items: &[f64]) -> Option<f64> {
+    fn stat(&self, items: Vec<f64>) -> Option<f64> {
+        let items = na::MatrixXx1::from_vec(items);
         match (items.is_empty(), self) {
             (true, _) => None,
             (_, LidarType::Density) => Some(items.mean()),
-            (_, LidarType::Closest) => Some(items.iter().fold(f64::NEG_INFINITY, |a, &e| a.max(e))),
+            (_, LidarType::Closest) => Some(items.max()),
         }
     }
 }
