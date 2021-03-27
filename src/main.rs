@@ -12,8 +12,31 @@ fn main() {
     let mut rovers = Vec::new();
     // Create agent with lidar, discrete action space and difference reward
     rovers.push(Rc::new(Rover::new(
-        DifferenceReward,
-        Some(Lidar::new(LidarType::Closest, 90.0, 2.0)),
+        Reward::Difference,
+        Some(Sensor::Lidar {
+            ltype: LidarType::Closest,
+            res: 45.0,
+            range: 2.0,
+            pos: Point::origin(),
+        }),
+    )));
+    rovers.push(Rc::new(Rover::new(
+        Reward::Default,
+        Some(Sensor::Lidar {
+            ltype: LidarType::Density,
+            res: 90.0,
+            range: 1.0,
+            pos: Point::origin(),
+        }),
+    )));
+    rovers.push(Rc::new(Rover::new(
+        Reward::Default,
+        Some(Sensor::Lidar {
+            ltype: LidarType::Density,
+            res: 90.0,
+            range: 3.0,
+            pos: Point::origin(),
+        }),
     )));
     let mut pois = Vec::new();
     pois.push(Rc::new(Poi::new(
@@ -30,14 +53,23 @@ type State = na::MatrixXx1<f64>;
 
 static ID_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
-struct Environment<T: EnvInit, S: Sensor, R: Reward> {
+struct Environment<T: EnvInit> {
     init_policy: T,
-    rovers: Vec<Rc<Rover<S, R>>>,
+    rovers: Vec<Rc<Rover>>,
     pois: Vec<Rc<Poi>>,
     size: (f64, f64),
 }
 
-impl<T: EnvInit, S: Sensor, R: Reward> Environment<T, S, R> {
+impl<T: EnvInit> Environment<T> {
+    fn new(init_policy: T, rovers: Vec<Rc<Rover>>, pois: Vec<Rc<Poi>>, size: (f64, f64)) -> Self {
+        Environment {
+            init_policy,
+            rovers,
+            pois,
+            size,
+        }
+    }
+
     fn step(&mut self, actions: Vec<Vector>) -> (Vec<State>, Vec<f64>) {
         for (i, mut rover) in self.rovers.iter_mut().enumerate() {
             // Take actions
@@ -101,7 +133,7 @@ impl<T: EnvInit, S: Sensor, R: Reward> Environment<T, S, R> {
 struct EnvRand;
 
 impl EnvInit for EnvRand {
-    fn init_rovers<T: Sensor, R: Reward>(&self, rovers: Vec<&mut Rc<Rover<T, R>>>) {
+    fn init_rovers(&self, rovers: Vec<&mut Rc<Rover>>) {
         for mut rover in rovers {
             Rc::get_mut(&mut rover)
                 .expect("Error: More than one reference to rover.")
@@ -123,7 +155,7 @@ struct EnvCorners {
 }
 
 impl EnvInit for EnvCorners {
-    fn init_rovers<T: Sensor, R: Reward>(&self, rovers: Vec<&mut Rc<Rover<T, R>>>) {
+    fn init_rovers(&self, rovers: Vec<&mut Rc<Rover>>) {
         let start = 1.0;
         let end = self.span - 1.0;
         let rad = self.span / f64::sqrt(3.0) / 2.0;
@@ -163,16 +195,16 @@ impl EnvInit for EnvCorners {
     }
 }
 
-struct Rover<T: Sensor, R: Reward> {
+struct Rover {
     ident: usize,
     position: Point,
     path: Vec<Point>,
-    reward_type: R,
-    sensor: Option<T>,
+    reward_type: Reward,
+    sensor: Option<Sensor>,
 }
 
-impl<T: Sensor, R: Reward> Rover<T, R> {
-    fn new(reward_type: R, sensor: Option<T>) -> Self {
+impl Rover {
+    fn new(reward_type: Reward, sensor: Option<Sensor>) -> Self {
         Rover {
             ident: ID_COUNTER.fetch_add(1, Ordering::SeqCst),
             position: Point::origin(),
@@ -182,7 +214,7 @@ impl<T: Sensor, R: Reward> Rover<T, R> {
         }
     }
 
-    fn scan(&self, rovers: Vec<Rc<Rover<T, R>>>, pois: Vec<Rc<Poi>>) -> State {
+    fn scan(&self, rovers: Vec<Rc<Rover>>, pois: Vec<Rc<Poi>>) -> State {
         // Remove self from the list of rovers
         let rovers = self.without_self(rovers);
 
@@ -194,7 +226,7 @@ impl<T: Sensor, R: Reward> Rover<T, R> {
     // TODO: How would you handle the case where a POI only gives out its reward once? If two
     // rovers access it at the same time (in the same frame), which one does the reward go to? It
     // could depend on where the rover is in the array of rovers.
-    fn reward(&self, rovers: Vec<Rc<Rover<T, R>>>, pois: Vec<Rc<Poi>>) -> f64 {
+    fn reward(&self, rovers: Vec<Rc<Rover>>, pois: Vec<Rc<Poi>>) -> f64 {
         self.reward_type.calculate(self.ident, rovers, pois)
     }
 
@@ -209,13 +241,13 @@ impl<T: Sensor, R: Reward> Rover<T, R> {
     }
 }
 
-impl<T: Sensor> Default for Rover<T, DefaultReward> {
+impl Default for Rover {
     fn default() -> Self {
-        Self::new(DefaultReward, None)
+        Self::new(Reward::Default, None)
     }
 }
 
-impl<T: Sensor, R: Reward> Agent for Rover<T, R> {
+impl Agent for Rover {
     fn id(&self) -> usize {
         self.ident
     }
@@ -245,113 +277,114 @@ impl<T: Sensor, R: Reward> Agent for Rover<T, R> {
     }
 }
 
-struct DefaultReward;
+enum Reward {
+    Default,
+    Difference,
+}
 
-impl Reward for DefaultReward {
-    fn calculate<T: Sensor, R: Reward>(
-        &self,
-        _id: usize,
-        rovers: Vec<Rc<Rover<T, R>>>,
-        pois: Vec<Rc<Poi>>,
-    ) -> f64 {
-        pois.into_iter()
-            .map(|poi| poi.give_reward(&rovers).unwrap_or(0.0))
-            .sum()
+impl Reward {
+    fn calculate(&self, id: usize, rovers: Vec<Rc<Rover>>, pois: Vec<Rc<Poi>>) -> f64 {
+        let default_calc = |rovers: Vec<Rc<Rover>>, pois: Vec<Rc<Poi>>| {
+            pois.into_iter()
+                .map(|poi| poi.give_reward(&rovers).unwrap_or(0.0))
+                .sum()
+        };
+        match self {
+            Reward::Default => default_calc(rovers, pois),
+            Reward::Difference => {
+                let reward = default_calc(rovers.clone(), pois.clone());
+                let rovers = without_id(id, rovers);
+                let reward_without_self = default_calc(rovers, pois);
+                reward - reward_without_self
+            }
+        }
     }
 }
 
-struct DifferenceReward;
+enum Sensor {
+    Lidar {
+        ltype: LidarType,
+        res: f64,
+        range: f64,
+        pos: Point,
+    },
+}
 
-impl Reward for DifferenceReward {
-    fn calculate<T: Sensor, R: Reward>(
-        &self,
-        id: usize,
-        rovers: Vec<Rc<Rover<T, R>>>,
-        pois: Vec<Rc<Poi>>,
-    ) -> f64 {
-        let reward = DefaultReward.calculate(id, rovers.clone(), pois.clone());
-        let rovers = without_id(id, rovers);
-        let reward_without_self = DefaultReward.calculate(id, rovers, pois);
-        reward - reward_without_self
+impl Sensor {
+    fn radius(&self) -> f64 {
+        match self {
+            Sensor::Lidar { range: x, .. } => *x,
+        }
     }
-}
 
-struct Lidar {
-    ltype: LidarType,
-    res: f64,
-    range: f64,
-    position: Point,
-}
-
-impl Lidar {
-    fn new(ltype: LidarType, resolution: f64, range: f64) -> Self {
-        Lidar {
-            ltype,
-            res: resolution,
-            range,
-            position: Point::origin(),
+    fn set_pos(&mut self, x: f64, y: f64) {
+        *self = match &self {
+            Sensor::Lidar {
+                ltype, res, range, ..
+            } => Sensor::Lidar {
+                ltype: *ltype,
+                res: *res,
+                range: *range,
+                pos: Point::new(x, y),
+            },
         }
     }
 
     fn unbounded_sector(&self, point: Point) -> usize {
-        let offset = point - self.position;
-        let angle = match offset.y.atan2(offset.x).to_degrees() {
-            x if x < 0.0 => x + 360.0,
-            x => x,
-        };
-        (angle / self.res).floor() as usize
-    }
-
-    fn sector(&self, point: Point) -> Option<usize> {
-        if na::distance(&self.position, &point) > self.range {
-            None
-        } else {
-            Some(self.unbounded_sector(point))
+        match self {
+            Sensor::Lidar { res, pos, .. } => {
+                let offset = point - pos;
+                let angle = match offset.y.atan2(offset.x).to_degrees() {
+                    x if x < 0.0 => x + 360.0,
+                    x => x,
+                };
+                (angle / res).floor() as usize
+            }
         }
     }
 
     fn sector_results<T: Agent>(&self, agents: Vec<Rc<T>>) -> Vec<f64> {
-        let num_sectors = (360.0 / self.res).ceil() as usize;
-        let mut results = vec![Vec::new(); num_sectors];
-        for agent in agents {
-            if agent.hidden() {
-                continue;
+        match self {
+            Sensor::Lidar {
+                ltype,
+                res,
+                range,
+                pos,
+            } => {
+                let num_sectors = (360.0 / res).ceil() as usize;
+                let mut results = vec![Vec::new(); num_sectors];
+                for agent in agents {
+                    if agent.hidden() {
+                        continue;
+                    }
+                    let dist_sq = na::distance_squared(pos, &agent.pos());
+                    if dist_sq > range.powi(2) {
+                        continue;
+                    }
+                    let sector = self.unbounded_sector(agent.pos());
+                    results[sector].push(agent.value() / dist_sq.max(0.001));
+                }
+                results
+                    .into_iter()
+                    .map(|v| ltype.stat(&v).unwrap_or(-1.0))
+                    .collect()
             }
-            let dist_sq = na::distance_squared(&self.position, &agent.pos());
-            if dist_sq > self.range.powi(2) {
-                continue;
-            }
-            let sector = self.unbounded_sector(agent.pos());
-            results[sector].push(agent.value() / dist_sq.max(0.001));
         }
-        results
-            .into_iter()
-            .map(|v| self.ltype.stat(&v).unwrap_or(-1.0))
-            .collect()
+    }
+
+    fn scan(&self, rovers: Vec<Rc<Rover>>, pois: Vec<Rc<Poi>>) -> State {
+        match self {
+            Sensor::Lidar { .. } => {
+                let poi_vals = self.sector_results(pois);
+                let rover_vals = self.sector_results(rovers);
+
+                State::from_iterator(1, rover_vals.into_iter().chain(poi_vals.into_iter()))
+            }
+        }
     }
 }
 
-impl Sensor for Lidar {
-    fn radius(&self) -> f64 {
-        self.range
-    }
-
-    fn set_pos(&mut self, x: f64, y: f64) {
-        self.position = Point::new(x, y);
-    }
-
-    fn scan<T: Sensor, R: Reward>(
-        &self,
-        rovers: Vec<Rc<Rover<T, R>>>,
-        pois: Vec<Rc<Poi>>,
-    ) -> State {
-        let poi_vals = self.sector_results(pois);
-        let rover_vals = self.sector_results(rovers);
-
-        State::from_iterator(1, rover_vals.into_iter().chain(poi_vals.into_iter()))
-    }
-}
-
+#[derive(Clone, Copy)]
 enum LidarType {
     Density,
     Closest,
@@ -446,13 +479,9 @@ fn without_id<A: Agent>(id: usize, agents: Vec<Rc<A>>) -> Vec<Rc<A>> {
 }
 
 trait EnvInit {
-    fn init_rovers<T: Sensor, R: Reward>(&self, rovers: Vec<&mut Rc<Rover<T, R>>>);
+    fn init_rovers(&self, rovers: Vec<&mut Rc<Rover>>);
     fn init_pois(&self, pois: Vec<&mut Rc<Poi>>);
-    fn init<T: Sensor, R: Reward>(
-        &self,
-        rovers: Vec<&mut Rc<Rover<T, R>>>,
-        pois: Vec<&mut Rc<Poi>>,
-    ) {
+    fn init(&self, rovers: Vec<&mut Rc<Rover>>, pois: Vec<&mut Rc<Poi>>) {
         self.init_rovers(rovers);
         self.init_pois(pois);
     }
@@ -477,20 +506,4 @@ trait Agent {
 trait Rewarder {
     fn give_reward<T: Agent>(&self, agents: &[Rc<T>]) -> Option<f64>;
     fn num_observing<T: Agent>(&self, agents: &[Rc<T>]) -> usize;
-}
-
-trait Sensor {
-    fn radius(&self) -> f64;
-    fn set_pos(&mut self, x: f64, y: f64);
-    fn scan<T: Sensor, R: Reward>(&self, rovers: Vec<Rc<Rover<T, R>>>, pois: Vec<Rc<Poi>>)
-        -> State;
-}
-
-trait Reward {
-    fn calculate<T: Sensor, R: Reward>(
-        &self,
-        id: usize,
-        rovers: Vec<Rc<Rover<T, R>>>,
-        pois: Vec<Rc<Poi>>,
-    ) -> f64;
 }
