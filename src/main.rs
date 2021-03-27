@@ -226,7 +226,9 @@ impl<T: Sensor, R: Reward> Agent for Rover<T, R> {
 
     fn set_pos(&mut self, x: f64, y: f64) {
         self.position = Point::new(x, y);
-        self.sensor.as_mut().map(|s| s.set_pos(x, y));
+        if let Some(s) = self.sensor.as_mut() {
+            s.set_pos(x, y);
+        }
         self.path.push(self.position);
     }
 
@@ -360,9 +362,7 @@ impl LidarType {
         match (items.is_empty(), self) {
             (true, _) => None,
             (_, LidarType::Density) => Some(items.mean()),
-            (_, LidarType::Closest) => {
-                Some(items.into_iter().fold(f64::NEG_INFINITY, |a, &e| a.max(e)))
-            }
+            (_, LidarType::Closest) => Some(items.iter().fold(f64::NEG_INFINITY, |a, &e| a.max(e))),
         }
     }
 }
