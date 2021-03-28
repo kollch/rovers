@@ -43,37 +43,47 @@ fn main() {
     let mut pois = Vec::new();
     pois.push(Rc::new(Poi::new(
         Point::origin(),
-        1.0,
+        3.0,
         1.0,
         Constraint::Count(3),
     )));
     pois.push(Rc::new(Poi::new(
         Point::origin(),
+        2.0,
         1.0,
-        1.0,
-        Constraint::Count(2),
+        Constraint::Count(3),
     )));
     pois.push(Rc::new(Poi::new(
         Point::origin(),
+        5.0,
         1.0,
-        1.0,
-        Constraint::Count(5),
+        Constraint::Count(3),
     )));
 
     // Create an environment
     let mut env = Environment::new(EnvCorners { span: 10.0 }, rovers, pois, (10.0, 10.0));
     env.reset();
 
+    /*
     let mut actions: Vec<Vector> = Vec::new();
     for _ in 0..env.rovers.len() {
         actions.push(Vector::new(random(), random()));
     }
+    */
+    // Use this for the moment as a way to have a hardcoded seed - now it matches the results of
+    // the original project
+    let actions = vec![
+        Vector::new(0.680375, -0.211234),
+        Vector::new(0.566198, 0.59688),
+        Vector::new(0.823295, -0.604897),
+        Vector::new(-0.329554, 0.536459),
+    ];
 
     let (states, _rewards) = env.step(actions);
 
     println!("Sample environment state (each row corresponds to the state of a rover):");
     for state in states {
-        println!("{}", state);
+        println!("{:?}", state.data.as_vec());
     }
 }
 
@@ -167,7 +177,7 @@ impl EnvInit for EnvRand {
         for mut rover in rovers {
             Rc::get_mut(&mut rover)
                 .expect("Error: More than one reference to rover.")
-                .position = Point::origin();
+                .set_pos(0.0, 0.0);
         }
     }
 
@@ -175,7 +185,7 @@ impl EnvInit for EnvRand {
         for mut poi in pois {
             Rc::get_mut(&mut poi)
                 .expect("Error: More than one reference to POI.")
-                .position = Point::origin();
+                .set_pos(0.0, 0.0);
         }
     }
 }
@@ -202,7 +212,7 @@ impl EnvInit for EnvCorners {
             };
             Rc::get_mut(&mut rover)
                 .expect("Error: More than one reference to rover.")
-                .position = Point::new(x, y);
+                .set_pos(x, y);
         }
     }
 
@@ -210,7 +220,7 @@ impl EnvInit for EnvCorners {
         let start = 0.0;
         let end = self.span - 1.0;
         for (i, mut poi) in pois.into_iter().enumerate() {
-            let offset = i as f64 / 4.0;
+            let offset = f64::trunc(i as f64 / 4.0);
             let (x, y) = match i % 4 {
                 0 => (start + offset, start + offset),
                 1 => (end - offset, start + offset),
@@ -220,7 +230,7 @@ impl EnvInit for EnvCorners {
             };
             Rc::get_mut(&mut poi)
                 .expect("Error: More than one reference to POI.")
-                .position = Point::new(x, y);
+                .set_pos(x, y);
         }
     }
 }
@@ -407,8 +417,10 @@ impl Sensor {
             Sensor::Lidar { .. } => {
                 let poi_vals = self.sector_results(pois);
                 let rover_vals = self.sector_results(rovers);
+                let state_len = poi_vals.len() + rover_vals.len();
+                let vals = rover_vals.into_iter().chain(poi_vals.into_iter());
 
-                State::from_iterator(1, rover_vals.into_iter().chain(poi_vals.into_iter()))
+                State::from_iterator(state_len, vals)
             }
         }
     }
@@ -438,19 +450,19 @@ enum Constraint {
 struct Poi {
     ident: usize,
     position: Point,
-    obs_radius: f64,
     val: f64,
+    obs_radius: f64,
     hid: bool,
     constraint: Constraint,
 }
 
 impl Poi {
-    fn new(position: Point, obs_radius: f64, val: f64, constraint: Constraint) -> Self {
+    fn new(position: Point, val: f64, obs_radius: f64, constraint: Constraint) -> Self {
         Poi {
             ident: ID_COUNTER.fetch_add(1, Ordering::SeqCst),
             position,
-            obs_radius,
             val,
+            obs_radius,
             hid: false,
             constraint,
         }
