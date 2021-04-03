@@ -64,20 +64,20 @@ fn main() {
     let mut env = Environment::new(EnvCorners { span: 10.0 }, rovers, pois, (10.0, 10.0));
     env.reset();
 
-    /*
     let mut actions: Vec<Vector> = Vec::new();
     for _ in 0..env.rovers.len() {
         actions.push(Vector::new(random(), random()));
     }
-    */
     // Use this for the moment as a way to have a hardcoded seed - now it matches the results of
     // the original project
+    /*
     let actions = vec![
         Vector::new(0.680375, -0.211234),
         Vector::new(0.566198, 0.59688),
         Vector::new(0.823295, -0.604897),
         Vector::new(-0.329554, 0.536459),
     ];
+    */
 
     let (states, _rewards) = env.step(actions);
 
@@ -101,6 +101,10 @@ struct Environment<T: EnvInit> {
 }
 
 impl<T: EnvInit> Environment<T> {
+    /// Constructs a new `Environment<T>`.
+    ///
+    /// Expects rover and POI vectors with `Rc`s that haven't been cloned yet; a singular reference
+    /// is necessary to mutate the rovers and POIs inside of them.
     fn new(init_policy: T, rovers: Vec<Rc<Rover>>, pois: Vec<Rc<Poi>>, size: (f64, f64)) -> Self {
         Environment {
             init_policy,
@@ -110,6 +114,9 @@ impl<T: EnvInit> Environment<T> {
         }
     }
 
+    /// Has rovers perform a singular action apiece.
+    ///
+    /// This function can be thought of as a "frame" or timestep through the environment.
     fn step(&mut self, actions: Vec<Vector>) -> (Vec<State>, Vec<f64>) {
         for (i, mut rover) in self.rovers.iter_mut().enumerate() {
             // Take actions
@@ -124,6 +131,10 @@ impl<T: EnvInit> Environment<T> {
         self.status()
     }
 
+    /// Resets rover and POI fields.
+    ///
+    /// Specifically, calls the `Rover`-specific function `Rover::reset(&mut self)` and sets the
+    /// `Poi` `hid` field to false.
     fn reset(&mut self) -> (Vec<State>, Vec<f64>) {
         // Clear agents
         for mut rover in self.rovers.iter_mut() {
@@ -145,6 +156,9 @@ impl<T: EnvInit> Environment<T> {
         self.status()
     }
 
+    /// Clamps positions for all rovers within the environment's bounds.
+    ///
+    /// Iterates through all rovers and bounds their positions to the bounds of the environment.
     fn clamp_positions(&mut self) {
         for mut rover in self.rovers.iter_mut() {
             let clamped = na::clamp(
@@ -158,6 +172,9 @@ impl<T: EnvInit> Environment<T> {
         }
     }
 
+    /// Returns the states and rewards of each rover.
+    ///
+    /// The *i*th element of each returning vector corresponds to the *i*th rover.
     fn status(&self) -> (Vec<State>, Vec<f64>) {
         let mut states = Vec::new();
         let mut rewards = Vec::new();
@@ -173,6 +190,7 @@ impl<T: EnvInit> Environment<T> {
 struct EnvRand;
 
 impl EnvInit for EnvRand {
+    /// Sets all rover positions to the origin.
     fn init_rovers(&self, rovers: Vec<&mut Rc<Rover>>) {
         for mut rover in rovers {
             Rc::get_mut(&mut rover)
@@ -181,6 +199,7 @@ impl EnvInit for EnvRand {
         }
     }
 
+    /// Sets all POI positions to the origin.
     fn init_pois(&self, pois: Vec<&mut Rc<Poi>>) {
         for mut poi in pois {
             Rc::get_mut(&mut poi)
@@ -195,6 +214,7 @@ struct EnvCorners {
 }
 
 impl EnvInit for EnvCorners {
+    /// Sets all rover positions oriented around the center of the environment.
     fn init_rovers(&self, rovers: Vec<&mut Rc<Rover>>) {
         let start = 1.0;
         let end = self.span - 1.0;
@@ -216,6 +236,7 @@ impl EnvInit for EnvCorners {
         }
     }
 
+    /// Sets the POIs in the corners of the environment.
     fn init_pois(&self, pois: Vec<&mut Rc<Poi>>) {
         let start = 0.0;
         let end = self.span - 1.0;
@@ -244,6 +265,7 @@ struct Rover {
 }
 
 impl Rover {
+    /// Constructs a new `Rover` located at the origin with an empty path and unique id.
     fn new(reward_type: Reward, sensor: Option<Sensor>) -> Self {
         Rover {
             ident: ID_COUNTER.fetch_add(1, Ordering::SeqCst),
@@ -254,6 +276,10 @@ impl Rover {
         }
     }
 
+    /// Returns a column vector of the rover based on the rovers and POIs around it.
+    ///
+    /// This column vector is generated from the state determined by the rover's sensor. If there
+    /// is no sensor on the rover, it returns a 1x1 column vector with its singular element -1.
     fn scan(&self, rovers: Vec<Rc<Rover>>, pois: Vec<Rc<Poi>>) -> State {
         // Remove self from the list of rovers
         let rovers = self.without_self(rovers);
@@ -263,18 +289,22 @@ impl Rover {
             .map_or(State::from_element(1, -1.0), |s| s.scan(rovers, pois))
     }
 
-    // TODO: How would you handle the case where a POI only gives out its reward once? If two
-    // rovers access it at the same time (in the same frame), which one does the reward go to? It
-    // could depend on where the rover is in the array of rovers.
+    /// Determines the value rewarded from rovers and POIs around the rover.
+    ///
+    /// TODO: How would you handle the case where a POI only gives out its reward once? If two
+    /// rovers access it at the same time (in the same frame), which one does the reward go to? It
+    /// could depend on where the rover is in the array of rovers.
     fn reward(&self, rovers: Vec<Rc<Rover>>, pois: Vec<Rc<Poi>>) -> f64 {
         self.reward_type.calculate(self.ident, rovers, pois)
     }
 
+    /// Resets the rover by clearing its path and setting its position to (0, 0).
     fn reset(&mut self) {
         self.set_pos(0.0, 0.0);
         self.path.clear();
     }
 
+    /// Moves the rover based on a specified action.
     fn act(&mut self, action: Vector) {
         let curr = self.position;
         self.set_pos(curr.x + action.x, curr.y + action.y);
@@ -323,6 +353,7 @@ enum Reward {
 }
 
 impl Reward {
+    /// Determines how much to reward a rover based on agents around it and the reward type.
     fn calculate(&self, id: usize, rovers: Vec<Rc<Rover>>, pois: Vec<Rc<Poi>>) -> f64 {
         let default_calc = |rovers: Vec<Rc<Rover>>, pois: Vec<Rc<Poi>>| {
             pois.into_iter()
@@ -351,12 +382,16 @@ enum Sensor {
 }
 
 impl Sensor {
+    /// Returns how far out the sensor can sense.
     fn radius(&self) -> f64 {
         match self {
             Sensor::Lidar { range: x, .. } => *x,
         }
     }
 
+    /// Sets the position of the sensor.
+    ///
+    /// Needed because the sensor doesn't know which rover owns it. This is not a public function.
     fn set_pos(&mut self, x: f64, y: f64) {
         *self = match &self {
             Sensor::Lidar {
@@ -370,6 +405,7 @@ impl Sensor {
         }
     }
 
+    /// Determines which sector a provided point is in.
     fn unbounded_sector(&self, point: Point) -> usize {
         match self {
             Sensor::Lidar { res, pos, .. } => {
@@ -383,6 +419,7 @@ impl Sensor {
         }
     }
 
+    /// Retrieves the rewards from the provided agents.
     fn sector_results<T: Agent>(&self, agents: Vec<Rc<T>>) -> Vec<f64> {
         match self {
             Sensor::Lidar {
@@ -412,6 +449,7 @@ impl Sensor {
         }
     }
 
+    /// Retrieves the rewards from the provided rovers and POIs.
     fn scan(&self, rovers: Vec<Rc<Rover>>, pois: Vec<Rc<Poi>>) -> State {
         match self {
             Sensor::Lidar { .. } => {
@@ -433,6 +471,7 @@ enum LidarType {
 }
 
 impl LidarType {
+    /// Aggregates provided rewards into a single statistic.
     fn stat(&self, items: Vec<f64>) -> Option<f64> {
         let items = na::MatrixXx1::from_vec(items);
         match (items.is_empty(), self) {
@@ -457,6 +496,7 @@ struct Poi {
 }
 
 impl Poi {
+    /// Constructs a new POI with a unique id.
     fn new(position: Point, val: f64, obs_radius: f64, constraint: Constraint) -> Self {
         Poi {
             ident: ID_COUNTER.fetch_add(1, Ordering::SeqCst),
@@ -514,6 +554,7 @@ impl Rewarder for Poi {
     }
 }
 
+/// Filters a `Vec` of agents, ignoring any that match the provided id.
 fn without_id<A: Agent>(id: usize, agents: Vec<Rc<A>>) -> Vec<Rc<A>> {
     agents
         .into_iter()
@@ -522,8 +563,11 @@ fn without_id<A: Agent>(id: usize, agents: Vec<Rc<A>>) -> Vec<Rc<A>> {
 }
 
 trait EnvInit {
+    /// Initializes provided rovers with new locations.
     fn init_rovers(&self, rovers: Vec<&mut Rc<Rover>>);
+    /// Initializes provided POIs with new locations.
     fn init_pois(&self, pois: Vec<&mut Rc<Poi>>);
+    /// Initializes provided rovers and POIs with new locations.
     fn init(&self, rovers: Vec<&mut Rc<Rover>>, pois: Vec<&mut Rc<Poi>>) {
         self.init_rovers(rovers);
         self.init_pois(pois);
@@ -531,22 +575,36 @@ trait EnvInit {
 }
 
 trait Agent {
+    /// Provides the ID of the agent.
     fn id(&self) -> usize;
+    /// Provides the position of the agent.
     fn pos(&self) -> Point;
+    /// Sets the position of the agent.
     fn set_pos(&mut self, x: f64, y: f64);
+    /// Provides the distance the agent can 'see' around itself.
     fn radius(&self) -> f64;
+    /// The value of a possible reward.
+    ///
+    /// This is meant to be used only if all constraints for giving a reward are met.
     fn value(&self) -> f64;
+    /// Checks if the agent can be seen by other agents, even if within range.
+    ///
+    /// Useful to intentionally prevent reward-giving.
     fn hidden(&self) -> bool;
+    /// Updates the position of the agent based on a provided offset.
     fn update_pos(&mut self, v: Vector) {
         let new_pos = self.pos() + v;
         self.set_pos(new_pos.x, new_pos.y);
     }
+    /// Filters the provided agents to remove itself from the `Vec`.
     fn without_self<A: Agent>(&self, agents: Vec<Rc<A>>) -> Vec<Rc<A>> {
         without_id(self.id(), agents)
     }
 }
 
 trait Rewarder {
+    /// Returns a reward, provided the rewarder met its constraints.
     fn give_reward<T: Agent>(&self, agents: &[Rc<T>]) -> Option<f64>;
+    /// Returns the number of agents observing the rewarder.
     fn num_observing<T: Agent>(&self, agents: &[Rc<T>]) -> usize;
 }
