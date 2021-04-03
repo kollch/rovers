@@ -5,8 +5,8 @@ use std::{
 
 use nalgebra as na;
 
-type Point = na::Point2<f64>;
-type Vector = na::Vector2<f64>;
+pub type Point = na::Point2<f64>;
+pub type Vector = na::Vector2<f64>;
 type State = na::MatrixXx1<f64>;
 
 static ID_COUNTER: AtomicUsize = AtomicUsize::new(0);
