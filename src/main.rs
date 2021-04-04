@@ -2,7 +2,13 @@ use std::rc::Rc;
 
 use rand::prelude::*;
 
-use rovers::*;
+use rovers::{
+    agents::{Poi, Rover},
+    env::{EnvCorners, Environment},
+    rewards::Reward,
+    sensors::{Constraint, LidarType, Sensor},
+    Point, Vector,
+};
 
 fn main() {
     println!("Hello, world!");
