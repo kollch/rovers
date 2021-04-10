@@ -12,6 +12,9 @@ pub mod env {
     use nalgebra as na;
     use std::rc::Rc;
 
+    /// An environment for rovers and POIs.
+    ///
+    /// Contains a boundary to the world.
     pub struct Environment<T: EnvInit> {
         init_policy: T,
         pub rovers: Vec<Rc<Rover>>,
@@ -111,6 +114,9 @@ pub mod env {
         }
     }
 
+    /// An environment initialization type, randomizing locations.
+    ///
+    /// Sets random locations for agents in the environment with the `EnvInit` trait.
     struct EnvRand;
 
     impl EnvInit for EnvRand {
@@ -133,6 +139,10 @@ pub mod env {
         }
     }
 
+    /// An environment initialization type, setting POIs to the corners of the environment.
+    ///
+    /// Rovers are set near the center of the environment and POIs are set near the corners.
+    /// This struct uses the `EnvInit` trait to set locations.
     pub struct EnvCorners {
         pub span: f64,
     }
@@ -180,6 +190,7 @@ pub mod env {
         }
     }
 
+    /// Provides a set of functions that initialize rovers and POIs to new locations.
     pub trait EnvInit {
         /// Initializes provided rovers with new locations.
         fn init_rovers(&self, rovers: Vec<&mut Rc<Rover>>);
@@ -207,6 +218,7 @@ pub mod agents {
 
     static ID_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
+    /// A rover; contains an optional sensor.
     pub struct Rover {
         ident: usize,
         position: Point,
@@ -298,6 +310,7 @@ pub mod agents {
         }
     }
 
+    /// A POI; gives a reward based on its constraint.
     pub struct Poi {
         ident: usize,
         position: Point,
@@ -366,6 +379,7 @@ pub mod agents {
         }
     }
 
+    /// Provides basic attributes and functionality of an agent.
     pub trait Agent {
         /// Provides the ID of the agent.
         fn id(&self) -> usize;
@@ -407,6 +421,9 @@ pub mod rewards {
     use super::agents::{without_id, Agent, Poi, Rover};
     use std::rc::Rc;
 
+    /// The type of a reward.
+    ///
+    /// Determines how to calculate the magnitude of the reward.
     pub enum Reward {
         Default,
         Difference,
@@ -432,6 +449,7 @@ pub mod rewards {
         }
     }
 
+    /// Provides an agent the functionality to give a reward.
     pub trait Rewarder {
         /// Returns a reward, provided the rewarder met its constraints.
         fn give_reward<T: Agent>(&self, agents: &[Rc<T>]) -> Option<f64>;
@@ -448,6 +466,7 @@ pub mod sensors {
     use nalgebra as na;
     use std::rc::Rc;
 
+    /// Types of sensors for a rover.
     pub enum Sensor {
         Lidar {
             ltype: LidarType,
@@ -541,6 +560,9 @@ pub mod sensors {
         }
     }
 
+    /// Types of lidar that can be used.
+    ///
+    /// Determines how rewards are compiled into a single statistic.
     #[derive(Clone, Copy)]
     pub enum LidarType {
         Density,
@@ -559,6 +581,7 @@ pub mod sensors {
         }
     }
 
+    /// Types of constraints a rewarder may have to reward.
     pub enum Constraint {
         Count(usize),
     }
