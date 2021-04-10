@@ -5,9 +5,8 @@ use rand::prelude::*;
 use rovers::{
     agents::{Poi, Rover},
     env::{EnvCorners, Environment},
-    rewards::Reward,
     sensors::{Constraint, LidarType, Sensor},
-    Point, Vector,
+    Point, Reward, Vector,
 };
 
 fn main() {

@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use nalgebra as na;
 
 pub type Point = na::Point2<f64>;
@@ -7,10 +9,9 @@ type State = na::MatrixXx1<f64>;
 pub mod env {
     use super::{
         agents::{Agent, Poi, Rover},
-        Point, State, Vector,
+        Point, Rc, State, Vector,
     };
     use nalgebra as na;
-    use std::rc::Rc;
 
     /// An environment for rovers and POIs.
     ///
@@ -108,7 +109,7 @@ pub mod env {
             // Observations and rewards
             for rover in self.rovers.iter() {
                 states.push(rover.scan(self.rovers.clone(), self.pois.clone()));
-                rewards.push(rover.reward(self.rovers.clone(), self.pois.clone()));
+                rewards.push(rover.get_reward(self.rovers.clone(), self.pois.clone()));
             }
             (states, rewards)
         }
@@ -206,9 +207,8 @@ pub mod env {
 
 pub mod agents {
     use super::{
-        rewards::{Reward, Rewarder},
         sensors::{Constraint, Sensor},
-        Point, State, Vector,
+        Point, Reward, State, Vector,
     };
     use nalgebra as na;
     use std::{
@@ -257,7 +257,7 @@ pub mod agents {
         /// TODO: How would you handle the case where a POI only gives out its reward once? If two
         /// rovers access it at the same time (in the same frame), which one does the reward go to? It
         /// could depend on where the rover is in the array of rovers.
-        pub fn reward(&self, rovers: Vec<Rc<Rover>>, pois: Vec<Rc<Poi>>) -> f64 {
+        pub fn get_reward(&self, rovers: Vec<Rc<Rover>>, pois: Vec<Rc<Poi>>) -> f64 {
             self.reward_type.calculate(self.ident, rovers, pois)
         }
 
@@ -303,6 +303,10 @@ pub mod agents {
 
         fn value(&self) -> f64 {
             1.0
+        }
+
+        fn reward<T: Agent>(&self, _agents: &[Rc<T>]) -> f64 {
+            self.value()
         }
 
         fn hidden(&self) -> bool {
@@ -355,27 +359,15 @@ pub mod agents {
             self.val
         }
 
-        fn hidden(&self) -> bool {
-            self.hid
-        }
-    }
-
-    impl Rewarder for Poi {
-        fn give_reward<T: Agent>(&self, agents: &[Rc<T>]) -> Option<f64> {
+        fn reward<T: Agent>(&self, agents: &[Rc<T>]) -> f64 {
             match (self.hid, &self.constraint) {
-                (false, Constraint::Count(x)) if self.num_observing(agents) >= *x => Some(self.val),
-                (_, Constraint::Count(_)) => None,
+                (false, Constraint::Count(x)) if self.num_observing(agents) >= *x => self.val,
+                (_, Constraint::Count(_)) => 0.0,
             }
         }
 
-        fn num_observing<T: Agent>(&self, agents: &[Rc<T>]) -> usize {
-            agents
-                .iter()
-                .filter(|a| {
-                    let dist = na::distance(&a.pos(), &self.position);
-                    dist <= self.obs_radius && dist <= a.radius()
-                })
-                .count()
+        fn hidden(&self) -> bool {
+            self.hid
         }
     }
 
@@ -393,6 +385,8 @@ pub mod agents {
         ///
         /// This is meant to be used only if all constraints for giving a reward are met.
         fn value(&self) -> f64;
+        /// Returns a reward, provided the agent met its constraints.
+        fn reward<T: Agent>(&self, agents: &[Rc<T>]) -> f64;
         /// Checks if the agent can be seen by other agents, even if within range.
         ///
         /// Useful to intentionally prevent reward-giving.
@@ -406,6 +400,20 @@ pub mod agents {
         fn without_self<A: Agent>(&self, agents: Vec<Rc<A>>) -> Vec<Rc<A>> {
             without_id(self.id(), agents)
         }
+        /// Returns the number of agents observing the agent.
+        fn num_observing<T: Agent>(&self, agents: &[Rc<T>]) -> usize {
+            if self.hidden() {
+                0
+            } else {
+                agents
+                    .iter()
+                    .filter(|a| {
+                        let dist = na::distance(&a.pos(), &self.pos());
+                        dist <= self.radius() && dist <= a.radius()
+                    })
+                    .count()
+            }
+        }
     }
 
     /// Filters a `Vec` of agents, ignoring any that match the provided id.
@@ -417,44 +425,36 @@ pub mod agents {
     }
 }
 
-pub mod rewards {
-    use super::agents::{without_id, Agent, Poi, Rover};
-    use std::rc::Rc;
+/// The type of a reward.
+///
+/// Determines how to calculate the magnitude of the reward.
+pub enum Reward {
+    Default,
+    Difference,
+}
 
-    /// The type of a reward.
-    ///
-    /// Determines how to calculate the magnitude of the reward.
-    pub enum Reward {
-        Default,
-        Difference,
-    }
+impl Reward {
+    /// Determines how much to reward a rover based on agents around it and the reward type.
+    pub fn calculate(
+        &self,
+        id: usize,
+        rovers: Vec<Rc<agents::Rover>>,
+        pois: Vec<Rc<agents::Poi>>,
+    ) -> f64 {
+        use agents::{without_id, Agent, Poi, Rover};
 
-    impl Reward {
-        /// Determines how much to reward a rover based on agents around it and the reward type.
-        pub fn calculate(&self, id: usize, rovers: Vec<Rc<Rover>>, pois: Vec<Rc<Poi>>) -> f64 {
-            let default_calc = |rovers: Vec<Rc<Rover>>, pois: Vec<Rc<Poi>>| {
-                pois.into_iter()
-                    .map(|poi| poi.give_reward(&rovers).unwrap_or(0.0))
-                    .sum()
-            };
-            match self {
-                Reward::Default => default_calc(rovers, pois),
-                Reward::Difference => {
-                    let reward = default_calc(rovers.clone(), pois.clone());
-                    let rovers = without_id(id, rovers);
-                    let reward_without_self = default_calc(rovers, pois);
-                    reward - reward_without_self
-                }
+        let default_calc = |rovers: Vec<Rc<Rover>>, pois: Vec<Rc<Poi>>| {
+            pois.into_iter().map(|poi| poi.reward(&rovers)).sum()
+        };
+        match self {
+            Reward::Default => default_calc(rovers, pois),
+            Reward::Difference => {
+                let reward = default_calc(rovers.clone(), pois.clone());
+                let rovers = without_id(id, rovers);
+                let reward_without_self = default_calc(rovers, pois);
+                reward - reward_without_self
             }
         }
-    }
-
-    /// Provides an agent the functionality to give a reward.
-    pub trait Rewarder {
-        /// Returns a reward, provided the rewarder met its constraints.
-        fn give_reward<T: Agent>(&self, agents: &[Rc<T>]) -> Option<f64>;
-        /// Returns the number of agents observing the rewarder.
-        fn num_observing<T: Agent>(&self, agents: &[Rc<T>]) -> usize;
     }
 }
 
