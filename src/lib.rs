@@ -74,7 +74,7 @@ pub mod env {
             for mut poi in self.pois.iter_mut() {
                 Rc::get_mut(&mut poi)
                     .expect("Error: More than one reference to POI.")
-                    .hid = false;
+                    .reset();
             }
             // Initialize
             self.init_policy.init(
@@ -261,12 +261,6 @@ pub mod agents {
             self.reward_type.calculate(self.ident, rovers, pois)
         }
 
-        /// Resets the rover by clearing its path and setting its position to (0, 0).
-        pub fn reset(&mut self) {
-            self.set_pos(0.0, 0.0);
-            self.path.clear();
-        }
-
         /// Moves the rover based on a specified action.
         pub fn act(&mut self, action: Vector) {
             let curr = self.position;
@@ -312,6 +306,12 @@ pub mod agents {
         fn hidden(&self) -> bool {
             false
         }
+
+        /// Resets the rover by clearing its path and setting its position to (0, 0).
+        fn reset(&mut self) {
+            self.set_pos(0.0, 0.0);
+            self.path.clear();
+        }
     }
 
     /// A POI; gives a reward based on its constraint.
@@ -320,7 +320,7 @@ pub mod agents {
         position: Point,
         val: f64,
         obs_radius: f64,
-        pub hid: bool,
+        hid: bool,
         constraint: Constraint,
     }
 
@@ -369,6 +369,11 @@ pub mod agents {
         fn hidden(&self) -> bool {
             self.hid
         }
+
+        /// Resets the POI by making it not hidden.
+        fn reset(&mut self) {
+            self.hid = false;
+        }
     }
 
     /// Provides basic attributes and functionality of an agent.
@@ -391,6 +396,8 @@ pub mod agents {
         ///
         /// Useful to intentionally prevent reward-giving.
         fn hidden(&self) -> bool;
+        /// Resets the agent.
+        fn reset(&mut self);
         /// Updates the position of the agent based on a provided offset.
         fn update_pos(&mut self, v: Vector) {
             let new_pos = self.pos() + v;
