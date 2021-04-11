@@ -51,11 +51,11 @@ fn main() {
     ];
 
     // Create an environment
-    let mut env = Environment::new(EnvCorners { span: 10.0 }, rovers, pois, (10.0, 10.0));
+    let mut env = Environment::new(EnvCorners, rovers, pois, (10.0, 10.0));
     env.reset();
 
     let mut actions: Vec<Vector> = Vec::new();
-    for _ in 0..env.rovers.len() {
+    for _ in 0..env.num_rovers {
         actions.push(Vector::new(random(), random()));
     }
     // Use this for the moment as a way to have a hardcoded seed - now it matches the results of

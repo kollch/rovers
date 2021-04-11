@@ -1,11 +1,18 @@
+//! A prototype rover environment for reinforcement learning.
+
+#![warn(missing_docs)]
+
 use std::rc::Rc;
 
 use nalgebra as na;
 
+/// A 2D point.
 pub type Point = na::Point2<f64>;
+/// A 2D vector.
 pub type Vector = na::Vector2<f64>;
 type State = na::MatrixXx1<f64>;
 
+/// Environment utilities to provide bounds on the world the agents interact in.
 pub mod env {
     use super::{
         agents::{Agent, Poi, Rover},
@@ -13,31 +20,40 @@ pub mod env {
     };
     use nalgebra as na;
 
-    /// An environment for rovers and POIs.
+    /// An environment for [rovers](Rover) and [POIs](Poi).
     ///
     /// Contains a boundary to the world.
     pub struct Environment<T: EnvInit> {
         init_policy: T,
-        pub rovers: Vec<Rc<Rover>>,
+        rovers: Vec<Rc<Rover>>,
         pois: Vec<Rc<Poi>>,
-        size: (f64, f64),
+        /// The number of rovers.
+        pub num_rovers: usize,
+        /// The number of POIs.
+        pub num_pois: usize,
+        /// The size of the environment, in (width, height).
+        pub size: (f64, f64),
     }
 
     impl<T: EnvInit> Environment<T> {
         /// Constructs a new `Environment<T>`.
         ///
-        /// Expects rover and POI vectors with `Rc`s that haven't been cloned yet; a singular reference
-        /// is necessary to mutate the rovers and POIs inside of them.
+        /// Expects rover and POI [`Vec`]s with [`Rc`]s that haven't been [cloned](Rc::clone()) yet;
+        /// a singular reference is necessary to mutate the rovers and POIs inside of them.
         pub fn new(
             init_policy: T,
             rovers: Vec<Rc<Rover>>,
             pois: Vec<Rc<Poi>>,
             size: (f64, f64),
         ) -> Self {
+            let num_rovers = rovers.len();
+            let num_pois = pois.len();
             Environment {
                 init_policy,
                 rovers,
                 pois,
+                num_rovers,
+                num_pois,
                 size,
             }
         }
@@ -61,8 +77,8 @@ pub mod env {
 
         /// Resets rover and POI fields.
         ///
-        /// Specifically, calls the `Rover`-specific function `Rover::reset(&mut self)` and sets the
-        /// `Poi` `hid` field to false.
+        /// Specifically, calls the [`Agent`]-specific function [`Agent::reset()`] for all
+        /// rovers and POIs in the environment.
         pub fn reset(&mut self) -> (Vec<State>, Vec<f64>) {
             // Clear agents
             for mut rover in self.rovers.iter_mut() {
@@ -80,6 +96,7 @@ pub mod env {
             self.init_policy.init(
                 self.rovers.iter_mut().collect(),
                 self.pois.iter_mut().collect(),
+                self.size,
             );
             self.status()
         }
@@ -104,8 +121,8 @@ pub mod env {
         ///
         /// The *i*th element of each returning vector corresponds to the *i*th rover.
         fn status(&self) -> (Vec<State>, Vec<f64>) {
-            let mut states = Vec::new();
-            let mut rewards = Vec::new();
+            let mut states = Vec::with_capacity(self.num_rovers);
+            let mut rewards = Vec::with_capacity(self.num_rovers);
             // Observations and rewards
             for rover in self.rovers.iter() {
                 states.push(rover.scan(self.rovers.clone(), self.pois.clone()));
@@ -115,14 +132,14 @@ pub mod env {
         }
     }
 
-    /// An environment initialization type, randomizing locations.
+    /// An [environment](Environment) initialization type, randomizing locations.
     ///
-    /// Sets random locations for agents in the environment with the `EnvInit` trait.
-    struct EnvRand;
+    /// Sets random locations for [agents](Agent) in the environment with the [`EnvInit`] trait.
+    pub struct EnvRand;
 
     impl EnvInit for EnvRand {
-        /// Sets all rover positions to the origin.
-        fn init_rovers(&self, rovers: Vec<&mut Rc<Rover>>) {
+        /// Sets all [rover](Rover) positions to the origin.
+        fn init_rovers(&self, rovers: Vec<&mut Rc<Rover>>, _size: (f64, f64)) {
             for mut rover in rovers {
                 Rc::get_mut(&mut rover)
                     .expect("Error: More than one reference to rover.")
@@ -130,8 +147,8 @@ pub mod env {
             }
         }
 
-        /// Sets all POI positions to the origin.
-        fn init_pois(&self, pois: Vec<&mut Rc<Poi>>) {
+        /// Sets all [POI](Poi) positions to the origin.
+        fn init_pois(&self, pois: Vec<&mut Rc<Poi>>, _size: (f64, f64)) {
             for mut poi in pois {
                 Rc::get_mut(&mut poi)
                     .expect("Error: More than one reference to POI.")
@@ -140,20 +157,20 @@ pub mod env {
         }
     }
 
-    /// An environment initialization type, setting POIs to the corners of the environment.
+    /// An [environment](Environment) initialization type, setting [POIs](Poi) to the corners of the
+    /// environment.
     ///
-    /// Rovers are set near the center of the environment and POIs are set near the corners.
-    /// This struct uses the `EnvInit` trait to set locations.
-    pub struct EnvCorners {
-        pub span: f64,
-    }
+    /// [Rovers](Rover) are set near the center of the environment and POIs are set near the corners.
+    /// This struct uses the [`EnvInit`] trait to set locations.
+    pub struct EnvCorners;
 
     impl EnvInit for EnvCorners {
         /// Sets all rover positions oriented around the center of the environment.
-        fn init_rovers(&self, rovers: Vec<&mut Rc<Rover>>) {
+        fn init_rovers(&self, rovers: Vec<&mut Rc<Rover>>, size: (f64, f64)) {
+            let span = f64::min(size.0, size.1);
             let start = 1.0;
-            let end = self.span - 1.0;
-            let rad = self.span / f64::sqrt(3.0) / 2.0;
+            let end = span - 1.0;
+            let rad = span / f64::sqrt(3.0) / 2.0;
             let center = (start + end) / 2.0;
             for (i, mut rover) in rovers.into_iter().enumerate() {
                 let offset1 = (i as f64 / 4.0) % (center - rad);
@@ -172,9 +189,10 @@ pub mod env {
         }
 
         /// Sets the POIs in the corners of the environment.
-        fn init_pois(&self, pois: Vec<&mut Rc<Poi>>) {
+        fn init_pois(&self, pois: Vec<&mut Rc<Poi>>, size: (f64, f64)) {
+            let span = f64::min(size.0, size.1);
             let start = 0.0;
-            let end = self.span - 1.0;
+            let end = span - 1.0;
             for (i, mut poi) in pois.into_iter().enumerate() {
                 let offset = f64::trunc(i as f64 / 4.0);
                 let (x, y) = match i % 4 {
@@ -191,20 +209,22 @@ pub mod env {
         }
     }
 
-    /// Provides a set of functions that initialize rovers and POIs to new locations.
+    /// Provides a set of functions that initialize [rovers](Rover) and [POIs](Poi) to new
+    /// locations.
     pub trait EnvInit {
-        /// Initializes provided rovers with new locations.
-        fn init_rovers(&self, rovers: Vec<&mut Rc<Rover>>);
-        /// Initializes provided POIs with new locations.
-        fn init_pois(&self, pois: Vec<&mut Rc<Poi>>);
-        /// Initializes provided rovers and POIs with new locations.
-        fn init(&self, rovers: Vec<&mut Rc<Rover>>, pois: Vec<&mut Rc<Poi>>) {
-            self.init_rovers(rovers);
-            self.init_pois(pois);
+        /// Initializes provided [rovers](Rover) with new locations.
+        fn init_rovers(&self, rovers: Vec<&mut Rc<Rover>>, size: (f64, f64));
+        /// Initializes provided [POIs](Poi) with new locations.
+        fn init_pois(&self, pois: Vec<&mut Rc<Poi>>, size: (f64, f64));
+        /// Initializes provided [rovers](Rover) and [POIs](Poi) with new locations.
+        fn init(&self, rovers: Vec<&mut Rc<Rover>>, pois: Vec<&mut Rc<Poi>>, size: (f64, f64)) {
+            self.init_rovers(rovers, size);
+            self.init_pois(pois, size);
         }
     }
 }
 
+/// Agents of the simulation.
 pub mod agents {
     use super::{
         sensors::{Constraint, Sensor},
@@ -218,7 +238,7 @@ pub mod agents {
 
     static ID_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
-    /// A rover; contains an optional sensor.
+    /// A rover; contains an [optional](Option) [sensor](Sensor).
     pub struct Rover {
         ident: usize,
         position: Point,
@@ -228,7 +248,7 @@ pub mod agents {
     }
 
     impl Rover {
-        /// Constructs a new `Rover` located at the origin with an empty path and unique id.
+        /// Constructs a new `Rover` located at the origin with an empty path and unique ID.
         pub fn new(reward_type: Reward, sensor: Option<Sensor>) -> Self {
             Rover {
                 ident: ID_COUNTER.fetch_add(1, Ordering::SeqCst),
@@ -239,10 +259,14 @@ pub mod agents {
             }
         }
 
-        /// Returns a column vector of the rover based on the rovers and POIs around it.
+        /// Returns a [column vector][state] of the [rover](Rover) based on the rovers and
+        /// [POIs](Poi) around it.
         ///
-        /// This column vector is generated from the state determined by the rover's sensor. If there
-        /// is no sensor on the rover, it returns a 1x1 column vector with its singular element -1.
+        /// This column vector is generated from the state determined by the rover's sensor. If
+        /// there is no sensor on the rover, it returns a 1x1 column vector with its singular
+        /// element -1.
+        ///
+        /// [state]: na::MatrixXx1<f64>
         pub fn scan(&self, rovers: Vec<Rc<Rover>>, pois: Vec<Rc<Poi>>) -> State {
             // Remove self from the list of rovers
             let rovers = self.without_self(rovers);
@@ -252,11 +276,11 @@ pub mod agents {
                 .map_or(State::from_element(1, -1.0), |s| s.scan(rovers, pois))
         }
 
-        /// Determines the value rewarded from rovers and POIs around the rover.
+        /// Determines the value rewarded from rovers and [POIs](Poi) around the rover.
         ///
         /// TODO: How would you handle the case where a POI only gives out its reward once? If two
-        /// rovers access it at the same time (in the same frame), which one does the reward go to? It
-        /// could depend on where the rover is in the array of rovers.
+        /// rovers access it at the same time (in the same frame), which one does the reward go to?
+        /// It could depend on where the rover is in the array of rovers.
         pub fn get_reward(&self, rovers: Vec<Rc<Rover>>, pois: Vec<Rc<Poi>>) -> f64 {
             self.reward_type.calculate(self.ident, rovers, pois)
         }
@@ -314,7 +338,7 @@ pub mod agents {
         }
     }
 
-    /// A POI; gives a reward based on its constraint.
+    /// A POI; gives a [reward](Reward) based on its [constraint](Constraint).
     pub struct Poi {
         ident: usize,
         position: Point,
@@ -325,7 +349,7 @@ pub mod agents {
     }
 
     impl Poi {
-        /// Constructs a new POI with a unique id.
+        /// Constructs a new POI with a unique ID.
         pub fn new(position: Point, val: f64, obs_radius: f64, constraint: Constraint) -> Self {
             Poi {
                 ident: ID_COUNTER.fetch_add(1, Ordering::SeqCst),
@@ -423,7 +447,7 @@ pub mod agents {
         }
     }
 
-    /// Filters a `Vec` of agents, ignoring any that match the provided id.
+    /// Filters a [`Vec`] of [agents](Agent), ignoring any that match the provided ID.
     pub fn without_id<A: Agent>(id: usize, agents: Vec<Rc<A>>) -> Vec<Rc<A>> {
         agents
             .into_iter()
@@ -434,14 +458,17 @@ pub mod agents {
 
 /// The type of a reward.
 ///
-/// Determines how to calculate the magnitude of the reward.
+/// Determines how to [calculate](Reward::calculate()) the magnitude of the reward.
 pub enum Reward {
+    /// Sums the rewards of all [rovers](agents::Rover).
     Default,
+    /// The difference between the default with and without a rover.
     Difference,
 }
 
 impl Reward {
-    /// Determines how much to reward a rover based on agents around it and the reward type.
+    /// Determines how much to [reward](agents::Agent::reward()) a rover based on
+    /// [agents](agents::Agent) around it and the [reward type](Reward).
     pub fn calculate(
         &self,
         id: usize,
@@ -465,6 +492,7 @@ impl Reward {
     }
 }
 
+/// Sensors used by [rovers](agents::Rover).
 pub mod sensors {
     use super::{
         agents::{Agent, Poi, Rover},
@@ -473,12 +501,22 @@ pub mod sensors {
     use nalgebra as na;
     use std::rc::Rc;
 
-    /// Types of sensors for a rover.
+    /// Types of sensors for a [rover](Rover).
     pub enum Sensor {
+        /// A sensor that uses lidar.
         Lidar {
+            /// The type of lidar, used to determine how to aggregate individual entities.
             ltype: LidarType,
+            /// Resolution; bins results into sectors.
+            ///
+            /// This value represents an angle, in degrees.
             res: f64,
+            /// The distance the sensor can "see".
             range: f64,
+            /// The position of the sensor.
+            ///
+            /// When initializing this type of sensor as part of an agent, this field can be any
+            /// value. It will be set to the position of the agent.
             pos: Point,
         },
     }
@@ -552,7 +590,7 @@ pub mod sensors {
             }
         }
 
-        /// Retrieves the rewards from the provided rovers and POIs.
+        /// Retrieves the [rewards](Agent::reward()) from the provided rovers and [POIs](Poi).
         pub fn scan(&self, rovers: Vec<Rc<Rover>>, pois: Vec<Rc<Poi>>) -> State {
             match self {
                 Sensor::Lidar { .. } => {
@@ -567,12 +605,14 @@ pub mod sensors {
         }
     }
 
-    /// Types of lidar that can be used.
+    /// Types of [lidar](Sensor) that can be used.
     ///
-    /// Determines how rewards are compiled into a single statistic.
+    /// Determines how [rewards](Agent::reward()) are compiled into a single statistic.
     #[derive(Clone, Copy)]
     pub enum LidarType {
+        /// Aggregates rewards into their average.
         Density,
+        /// Aggregates rewards into their maximum.
         Closest,
     }
 
@@ -588,8 +628,9 @@ pub mod sensors {
         }
     }
 
-    /// Types of constraints a rewarder may have to reward.
+    /// Types of constraints an [agent](Agent) may have to [reward](Agent::reward()).
     pub enum Constraint {
+        /// Constrains by requiring a minimum number of agents watching at the given moment.
         Count(usize),
     }
 }
