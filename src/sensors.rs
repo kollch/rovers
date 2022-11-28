@@ -1,4 +1,4 @@
-//! Sensors used by [rovers](agents::Rover).
+//! Sensors used by [rovers](super::agents::Rover).
 
 use super::{
     agents::{Agent, Poi, Rover},
